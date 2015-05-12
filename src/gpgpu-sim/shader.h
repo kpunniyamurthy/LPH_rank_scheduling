@@ -1191,7 +1191,7 @@ protected:
    enum mem_stage_stall_type m_mem_rc;
 
    shader_core_stats *m_stats;
-   //added new for tracking cache_hits per warp
+   //kp added new for tracking cache_hits per warp
    std::map<unsigned int,unsigned int> hit_count;//warp_id -> hit count  
 
    // for debugging

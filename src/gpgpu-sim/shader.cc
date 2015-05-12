@@ -706,7 +706,7 @@ void shader_core_ctx::issue(){
     unsigned int hits, rank;
     unsigned int warp_id;
     for (unsigned i = 0; i < schedulers.size(); i++) {
-        //update the rank of all the ranks
+        //kp update the rank of all the ranks
 	temp_ldst = get_ldst();
         for (unsigned j = 0; j < m_warp.size(); j++) { //iterate over all the warps assigned to this core
 	   warp_id = m_warp[j].get_warp_id();
@@ -861,7 +861,7 @@ void scheduler_unit::cycle()
                             if( m_mem_out->has_free() ) {
                                 m_shader->issue_warp(*m_mem_out,pI,active_mask,warp_id);
                                 issued++;
-                                issued_count.at(warp_id) =issued_count.at(warp_id) + 1; // increment the instruction issued count
+                                issued_count.at(warp_id) =issued_count.at(warp_id) + 1; //kp increment the instruction issued count
                                 issued_inst=true;
                                 warp_inst_issued = true;
                             }
@@ -872,14 +872,14 @@ void scheduler_unit::cycle()
                                 // always prefer SP pipe for operations that can use both SP and SFU pipelines
                                 m_shader->issue_warp(*m_sp_out,pI,active_mask,warp_id);
                                 issued++;
-                                issued_count.at(warp_id) =issued_count.at(warp_id) + 1; // increment the instruction issued count
+                                issued_count.at(warp_id) =issued_count.at(warp_id) + 1; //kp increment the instruction issued count
                                 issued_inst=true;
                                 warp_inst_issued = true;
                             } else if ( (pI->op == SFU_OP) || (pI->op == ALU_SFU_OP) ) {
                                 if( sfu_pipe_avail ) {
                                     m_shader->issue_warp(*m_sfu_out,pI,active_mask,warp_id);
                                     issued++;
-                                    issued_count.at(warp_id) =issued_count.at(warp_id) + 1; // increment the instruction issued count
+                                    issued_count.at(warp_id) =issued_count.at(warp_id) + 1; //kp increment the instruction issued count
                                     issued_inst=true;
                                     warp_inst_issued = true;
                                 }
@@ -1359,6 +1359,8 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, war
     std::list<cache_event> events;
     enum cache_request_status status = cache->access(mf->get_addr(),mf,gpu_sim_cycle+gpu_tot_sim_cycle,events);
     // increment hit count for the warp
+
+    //kp added
     if((status == HIT) || (status == HIT_RESERVED)) //TODO check what is HIT_RESERVED and whether it should be counted or not  
       {
         hit_count.at(inst.warp_id()) = hit_count.at(inst.warp_id()) + 1;   
