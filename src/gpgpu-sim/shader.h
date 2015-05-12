@@ -55,7 +55,8 @@
 #include "traffic_breakdown.h"
 
 
-
+//kp flag to be set
+#define CACHE_HIT_ORDERING 1
 #define NO_OP_FLAG            0xFF
 
 /* READ_PACKET_SIZE:
@@ -227,6 +228,12 @@ public:
     unsigned get_dynamic_warp_id() const { return m_dynamic_warp_id; }
     unsigned get_warp_id() const { return m_warp_id; }
 
+    //kp  added new 
+    float get_rank(){return weighted_rank;}
+    unsigned int get_issued_count(){return issued_count;}
+    void set_rank(float rank){weighted_rank = rank;}
+    void set_issued_count(unsigned int count){issued_count = count;}
+
 private:
     static const unsigned IBUFFER_SIZE=2;
     class shader_core_ctx *m_shader;
@@ -260,6 +267,9 @@ private:
 
     unsigned m_stores_outstanding; // number of store requests sent but not yet acknowledged
     unsigned m_inst_in_pipeline;
+    float weighted_rank;
+    unsigned int issued_count;
+     
 };
 
 
@@ -350,15 +360,16 @@ public:
                             OrderingType age_ordering,
                             bool (*priority_func)(U lhs, U rhs) );
     static bool sort_warps_by_oldest_dynamic_id(shd_warp_t* lhs, shd_warp_t* rhs);
-
+    //kp Esha added for ordering
+    static bool sort_warps_by_cache_hits(shd_warp_t* lhs, shd_warp_t* rhs);
     // Derived classes can override this function to populate
     // m_supervised_warps with their scheduling policies
     virtual void order_warps() = 0;
 
     //kp  added new 
-    unsigned int get_rank(unsigned int warp_id){return weighted_rank.at(warp_id);}
-    unsigned int get_issued_count(unsigned int warp_id){return issued_count.at(warp_id);}
-    void set_rank(unsigned int warp_id, unsigned int rank){weighted_rank.at(warp_id) = rank;}
+ //   float get_rank(unsigned int warp_id){return weighted_rank.at(warp_id);}
+ //   unsigned int get_issued_count(unsigned int warp_id){return issued_count.at(warp_id);}
+ //   void set_rank(unsigned int warp_id, float rank){weighted_rank.at(warp_id) = rank;}
 	    
 protected:
     virtual void do_on_warp_issued( unsigned warp_id,
@@ -392,8 +403,8 @@ protected:
     int m_id;
     
     //kp added new to track the instruction issued by each warp
-    std::map<unsigned int, unsigned int> issued_count; //warp_id -> instructions_issued;
-    std::map<unsigned int, unsigned int> weighted_rank; //warp_id -> rank;	
+ //   std::map<unsigned int, unsigned int> issued_count; //warp_id -> instructions_issued;
+//    std::map<unsigned int, float> weighted_rank; //warp_id -> rank;	
 };
 
 class lrr_scheduler : public scheduler_unit {

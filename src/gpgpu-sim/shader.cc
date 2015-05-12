@@ -703,7 +703,8 @@ void shader_core_ctx::issue_warp( register_set& pipe_reg_set, const warp_inst_t*
 void shader_core_ctx::issue(){
     //really is issue;
     ldst_unit *temp_ldst;
-    unsigned int hits, rank;
+    unsigned int hits;
+    float rank;
     unsigned int warp_id;
     for (unsigned i = 0; i < schedulers.size(); i++) {
         //kp update the rank of all the ranks
@@ -711,8 +712,11 @@ void shader_core_ctx::issue(){
         for (unsigned j = 0; j < m_warp.size(); j++) { //iterate over all the warps assigned to this core
 	   warp_id = m_warp[j].get_warp_id();
    	   hits = temp_ldst->get_cache_hits(warp_id);
-           rank = hits/ (schedulers[i]->get_issued_count(warp_id)); //TODO change the function if required
-	   schedulers[i]->set_rank(warp_id, rank);	           
+           if(m_warp[j].get_issued_count()) //make sure non zero
+               rank = ((float)hits)/ ((float)(m_warp[j].get_issued_count())); //TODO change the function if required
+           else
+               rank = 0;
+	   m_warp[j].set_rank(rank);	           
 	} 
          
         schedulers[i]->cycle();
@@ -861,7 +865,7 @@ void scheduler_unit::cycle()
                             if( m_mem_out->has_free() ) {
                                 m_shader->issue_warp(*m_mem_out,pI,active_mask,warp_id);
                                 issued++;
-                                issued_count.at(warp_id) =issued_count.at(warp_id) + 1; //kp increment the instruction issued count
+                                warp(warp_id).set_issued_count(warp(warp_id).get_issued_count() + 1); //kp inc the instruction issued count
                                 issued_inst=true;
                                 warp_inst_issued = true;
                             }
@@ -872,14 +876,14 @@ void scheduler_unit::cycle()
                                 // always prefer SP pipe for operations that can use both SP and SFU pipelines
                                 m_shader->issue_warp(*m_sp_out,pI,active_mask,warp_id);
                                 issued++;
-                                issued_count.at(warp_id) =issued_count.at(warp_id) + 1; //kp increment the instruction issued count
+                                warp(warp_id).set_issued_count(warp(warp_id).get_issued_count() + 1);//kp inc the instruction issued count
                                 issued_inst=true;
                                 warp_inst_issued = true;
                             } else if ( (pI->op == SFU_OP) || (pI->op == ALU_SFU_OP) ) {
                                 if( sfu_pipe_avail ) {
                                     m_shader->issue_warp(*m_sfu_out,pI,active_mask,warp_id);
                                     issued++;
-                                    issued_count.at(warp_id) =issued_count.at(warp_id) + 1; //kp increment the instruction issued count
+                                    warp(warp_id).set_issued_count(warp(warp_id).get_issued_count() + 1); //kp inc the instruction issued count
                                     issued_inst=true;
                                     warp_inst_issued = true;
                                 }
@@ -957,6 +961,23 @@ bool scheduler_unit::sort_warps_by_oldest_dynamic_id(shd_warp_t* lhs, shd_warp_t
     }
 }
 
+//kp Esha added this to schedule
+bool scheduler_unit::sort_warps_by_cache_hits(shd_warp_t* lhs, shd_warp_t* rhs)
+{   
+    if (rhs && lhs) {
+        if ( lhs->done_exit() || lhs->waiting() ) {
+            return false; //false means right will be scheduled
+        } else if ( rhs->done_exit() || rhs->waiting() ) {
+            return true;
+        } else {
+            printf("ESHA_SCHEDULING: lhs: %f rhs: %f \n", lhs->get_rank(), rhs->get_rank());
+            return (lhs->get_rank() > rhs->get_rank());
+        }
+    } else {
+        return lhs < rhs;
+    }
+}  
+
 void lrr_scheduler::order_warps()
 {
     order_lrr( m_next_cycle_prioritized_warps,
@@ -967,12 +988,23 @@ void lrr_scheduler::order_warps()
 
 void gto_scheduler::order_warps()
 {
+//kp changing here to order by our priority function - should it still be greedy or not?
+    
+#if CACHE_HIT_ORDERING
+    order_by_priority( m_next_cycle_prioritized_warps,
+                       m_supervised_warps,
+                       m_last_supervised_issued,
+                       m_supervised_warps.size(),
+                       ORDERING_GREEDY_THEN_PRIORITY_FUNC,
+                       scheduler_unit::sort_warps_by_cache_hits );
+#else
     order_by_priority( m_next_cycle_prioritized_warps,
                        m_supervised_warps,
                        m_last_supervised_issued,
                        m_supervised_warps.size(),
                        ORDERING_GREEDY_THEN_PRIORITY_FUNC,
                        scheduler_unit::sort_warps_by_oldest_dynamic_id );
+#endif
 }
 
 void
@@ -1219,7 +1251,10 @@ void ldst_unit::get_L1T_sub_stats(struct cache_sub_stats &css) const{
 
 //kp  added new 
 unsigned int ldst_unit::get_cache_hits (unsigned int warp_id){
-  return hit_count.at(warp_id);
+    if(hit_count.count(warp_id)==0){
+        hit_count.at(warp_id) = 0;
+    }
+    return hit_count.at(warp_id);
 }
 
 void shader_core_ctx::warp_inst_complete(const warp_inst_t &inst)
@@ -1363,6 +1398,10 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, war
     //kp added
     if((status == HIT) || (status == HIT_RESERVED)) //TODO check what is HIT_RESERVED and whether it should be counted or not  
       {
+        printf("ESHA: here warp id %d\n", inst.warp_id());
+        if(hit_count.count(inst.warp_id())==0){
+            hit_count.at(inst.warp_id()) = 0;
+        }
         hit_count.at(inst.warp_id()) = hit_count.at(inst.warp_id()) + 1;   
       }
     return process_cache_access( cache, mf->get_addr(), inst, events, mf, status );
