@@ -710,13 +710,17 @@ void shader_core_ctx::issue(){
         //kp update the rank of all the ranks
 	temp_ldst = get_ldst();
         for (unsigned j = 0; j < m_warp.size(); j++) { //iterate over all the warps assigned to this core
-	   warp_id = m_warp[j].get_warp_id();
+	   
+           warp_id = m_warp[j].get_warp_id();
+           
    	   hits = temp_ldst->get_cache_hits(warp_id);
+           
            if(m_warp[j].get_issued_count()) //make sure non zero
                rank = ((float)hits)/ ((float)(m_warp[j].get_issued_count())); //TODO change the function if required
            else
                rank = 0;
 	   m_warp[j].set_rank(rank);	           
+           
 	} 
          
         schedulers[i]->cycle();
@@ -970,8 +974,11 @@ bool scheduler_unit::sort_warps_by_cache_hits(shd_warp_t* lhs, shd_warp_t* rhs)
         } else if ( rhs->done_exit() || rhs->waiting() ) {
             return true;
         } else {
-            printf("ESHA_SCHEDULING: lhs: %f rhs: %f \n", lhs->get_rank(), rhs->get_rank());
-            return (lhs->get_rank() > rhs->get_rank());
+            //printf("ESHA_SCHEDULING: lhs: %f rhs: %f \n", lhs->get_rank(), rhs->get_rank());
+            if(lhs->get_rank() != rhs->get_rank())
+                return (lhs->get_rank() > rhs->get_rank());
+            else
+                return lhs->get_dynamic_warp_id() < rhs->get_dynamic_warp_id();
         }
     } else {
         return lhs < rhs;
@@ -1252,8 +1259,12 @@ void ldst_unit::get_L1T_sub_stats(struct cache_sub_stats &css) const{
 //kp  added new 
 unsigned int ldst_unit::get_cache_hits (unsigned int warp_id){
     if(hit_count.count(warp_id)==0){
-        hit_count.at(warp_id) = 0;
+        
+        //hit_count.at(warp_id) = 0;
+        hit_count.insert(std::pair<unsigned int, unsigned int>(warp_id, 0));
+        
     }
+    
     return hit_count.at(warp_id);
 }
 
@@ -1398,10 +1409,11 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, war
     //kp added
     if((status == HIT) || (status == HIT_RESERVED)) //TODO check what is HIT_RESERVED and whether it should be counted or not  
       {
-        printf("ESHA: here warp id %d\n", inst.warp_id());
+        
         if(hit_count.count(inst.warp_id())==0){
-            hit_count.at(inst.warp_id()) = 0;
+            hit_count.insert(std::pair<unsigned int, unsigned int>(inst.warp_id(), 0));
         }
+        //printf("ESHA: arrived at this milestone \n");
         hit_count.at(inst.warp_id()) = hit_count.at(inst.warp_id()) + 1;   
       }
     return process_cache_access( cache, mf->get_addr(), inst, events, mf, status );
