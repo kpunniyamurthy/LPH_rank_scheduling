@@ -56,7 +56,8 @@
 
 
 //kp flag to be set
-#define CACHE_HIT_ORDERING 1
+#define CACHE_HIT_ORDERING 0
+#define CCWS 1
 #define NO_OP_FLAG            0xFF
 
 /* READ_PACKET_SIZE:
@@ -234,6 +235,10 @@ public:
     void set_rank(float rank){weighted_rank = rank;}
     void set_issued_count(unsigned int count){issued_count = count;}
 
+    //[Ali]: CCWS idea
+    unsigned int get_LLS() { return LLS; }
+    void set_LLS( unsigned int lls ) { LLS = lls; }
+
 private:
     static const unsigned IBUFFER_SIZE=2;
     class shader_core_ctx *m_shader;
@@ -269,7 +274,9 @@ private:
     unsigned m_inst_in_pipeline;
     float weighted_rank;
     unsigned int issued_count;
-     
+
+    //[Ali]:: CCWS idea
+    unsigned int LLS;
 };
 
 
@@ -362,6 +369,32 @@ public:
     static bool sort_warps_by_oldest_dynamic_id(shd_warp_t* lhs, shd_warp_t* rhs);
     //kp Esha added for ordering
     static bool sort_warps_by_cache_hits(shd_warp_t* lhs, shd_warp_t* rhs);
+    //[Ali] ordering based on LLS
+    static bool sort_warps_by_LLS(shd_warp_t* lhs, shd_warp_t* rhs);
+
+    //[Ali]: getting the threshold observed from this scheduler.
+    float get_threshold()
+    {
+        float sum_LLS = 0;
+        float sum_inst = 0;
+
+        for( int i = 0; i < m_warp->size(); i++ )
+        {
+            sum_LLS += warp( i ).get_LLS();
+        }
+        for( int i = 0; i < m_warp->size(); i++ )
+        {
+            sum_inst += warp( i ).get_issued_count();
+        }
+
+        // printf( "[Ali] sum inst:%d\n", sum_inst );
+        // printf( "[Ali] sum LLS:%d\n", sum_LLS );
+        if( sum_inst != 0.0 )
+            return ( sum_LLS / sum_inst ); //[Ali]: it does not have the throttleing value yet!
+
+        return 0.0;
+    }
+
     // Derived classes can override this function to populate
     // m_supervised_warps with their scheduling policies
     virtual void order_warps() = 0;
@@ -1142,6 +1175,17 @@ public:
     //kp added new functions to get cache hits
     unsigned int get_cache_hits (unsigned int warp_id);
 
+    //[Ali]: return LLS
+    unsigned int get_LLS( unsigned int warp_id )
+    {
+        unsigned int ans = 0;
+        if( LLS_store.count( warp_id ) != 0 )
+            ans = LLS_store.at( warp_id );
+
+        //printf( "answer: %u\n", ans );
+        return ans;
+    }
+
 protected:
     ldst_unit( mem_fetch_interface *icnt,
                shader_core_mem_fetch_allocator *mf_allocator,
@@ -1204,6 +1248,10 @@ protected:
    shader_core_stats *m_stats;
    //kp added new for tracking cache_hits per warp
    std::map<unsigned int,unsigned int> hit_count;//warp_id -> hit count  
+
+   //[Ali]: similar to the map...
+   std::map< unsigned int, std::set< new_addr_type > > cache_line_history;//warp_id -> set of accessed blocks
+   std::map< unsigned int, unsigned int > LLS_store;//warp_id -> LLS
 
    // for debugging
    unsigned long long m_last_inst_gpu_sim_cycle;

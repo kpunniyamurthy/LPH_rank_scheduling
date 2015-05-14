@@ -964,6 +964,7 @@ public:
     void print( FILE *fout ) const;
     unsigned get_uid() const { return m_uid; }
 
+    const core_config* get_config() { return m_config; }
 
 protected:
 

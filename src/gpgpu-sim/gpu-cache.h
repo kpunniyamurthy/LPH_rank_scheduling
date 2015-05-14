@@ -612,6 +612,7 @@ public:
     bool data_port_free() const { return m_bandwidth_management.data_port_free(); } 
     bool fill_port_free() const { return m_bandwidth_management.fill_port_free(); } 
 
+    new_addr_type block_addr( new_addr_type addr ) { return m_config.block_addr( addr ); }
 protected:
     // Constructor that can be used by derived classes with custom tag arrays
     baseline_cache( const char *name,
@@ -1030,6 +1031,8 @@ public:
     void get_sub_stats(struct cache_sub_stats &css) const{
         m_stats.get_sub_stats(css);
     }
+
+    new_addr_type block_addr( new_addr_type addr ) { return m_config.block_addr( addr ); }
 private:
     std::string m_name;
     const cache_config &m_config;

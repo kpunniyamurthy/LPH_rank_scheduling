@@ -700,30 +700,34 @@ void shader_core_ctx::issue_warp( register_set& pipe_reg_set, const warp_inst_t*
     m_warp[warp_id].set_next_pc(next_inst->pc + next_inst->isize);
 }
 
-void shader_core_ctx::issue(){
+void shader_core_ctx::issue()
+{
     //really is issue;
     ldst_unit *temp_ldst;
     unsigned int hits;
     float rank;
     unsigned int warp_id;
-    for (unsigned i = 0; i < schedulers.size(); i++) {
-        //kp update the rank of all the ranks
-	temp_ldst = get_ldst();
-        for (unsigned j = 0; j < m_warp.size(); j++) { //iterate over all the warps assigned to this core
-	   
-           warp_id = m_warp[j].get_warp_id();
-           
-   	   hits = temp_ldst->get_cache_hits(warp_id);
-           
-           if(m_warp[j].get_issued_count()) //make sure non zero
-               rank = ((float)hits)/ ((float)(m_warp[j].get_issued_count())); //TODO change the function if required
-           else
-               rank = 0;
-	   m_warp[j].set_rank(rank);	           
-           
-	} 
-         
-        schedulers[i]->cycle();
+    for (unsigned i = 0; i < schedulers.size(); i++) 
+    {
+      //kp update the rank of all the ranks
+      temp_ldst = get_ldst();
+      for (unsigned j = 0; j < m_warp.size(); j++) 
+      { 
+        //iterate over all the warps assigned to this core
+        warp_id = m_warp[j].get_warp_id();
+        hits = temp_ldst->get_cache_hits(warp_id);
+
+        if(m_warp[j].get_issued_count()) //make sure non zero
+          rank = ((float)hits)/ ((float)(m_warp[j].get_issued_count())); //TODO change the function if required
+        else
+          rank = 0;
+
+        m_warp[j].set_rank(rank);	           
+
+        //[Ali]: getting the LLS from load/store unit.
+        m_warp[ j ].set_LLS( temp_ldst->get_LLS( m_warp[ j ].get_warp_id() ) );
+      }  
+      schedulers[i]->cycle();
     }
 }
 
@@ -865,14 +869,24 @@ void scheduler_unit::cycle()
                         ready_inst = true;
                         const active_mask_t &active_mask = m_simt_stack[warp_id]->get_active_mask();
                         assert( warp(warp_id).inst_in_pipeline() );
-                        if ( (pI->op == LOAD_OP) || (pI->op == STORE_OP) || (pI->op == MEMORY_BARRIER_OP) ) {
-                            if( m_mem_out->has_free() ) {
+                        if ( (pI->op == LOAD_OP) || (pI->op == STORE_OP) || (pI->op == MEMORY_BARRIER_OP) ) 
+                        {
+                          //[Ali]: CCWS checking for threshold, if it's a load and it's higher than core threshold, don't issue.
+                          #if CCWS
+                          if( !(pI->op == LOAD_OP) || !(warp( warp_id ).get_LLS() > get_threshold()) )
+                          #endif
+                          {
+                            //printf( "[Ali]: LLS value: %d\n", warp( warp_id ).get_LLS() );
+
+                            if( m_mem_out->has_free() ) 
+                            {
                                 m_shader->issue_warp(*m_mem_out,pI,active_mask,warp_id);
                                 issued++;
                                 warp(warp_id).set_issued_count(warp(warp_id).get_issued_count() + 1); //kp inc the instruction issued count
                                 issued_inst=true;
                                 warp_inst_issued = true;
                             }
+                          }
                         } else {
                             bool sp_pipe_avail = m_sp_out->has_free();
                             bool sfu_pipe_avail = m_sfu_out->has_free();
@@ -910,6 +924,10 @@ void scheduler_unit::cycle()
                                (*iter)->get_dynamic_warp_id(),
                                issued );
                 do_on_warp_issued( warp_id, issued, iter );
+            }
+            else //[Ali]: CCWS, if instruction is not issued, reduce the LLS.
+            {
+              warp( warp_id ).set_LLS( warp( warp_id ).get_LLS() == 0 ? 0 : warp( warp_id ).get_LLS() - 1 );
             }
             checked++;
         }
@@ -985,6 +1003,31 @@ bool scheduler_unit::sort_warps_by_cache_hits(shd_warp_t* lhs, shd_warp_t* rhs)
     }
 }  
 
+//[Ali]: CCWS scheduling
+bool scheduler_unit::sort_warps_by_LLS(shd_warp_t* lhs, shd_warp_t* rhs)
+{
+  if( rhs && lhs )
+  {
+    if ( lhs->done_exit() || lhs->waiting() ) 
+    {
+      return false;
+    } 
+    else if ( rhs->done_exit() || rhs->waiting() ) 
+    {
+      return true;
+    }
+    else
+    {
+      if( lhs->get_LLS() != rhs->get_LLS() )
+        return (lhs->get_LLS() < rhs->get_LLS());
+      else
+        return lhs->get_dynamic_warp_id() < rhs->get_dynamic_warp_id();
+    }
+  }
+  else 
+    return lhs < rhs;
+}
+
 void lrr_scheduler::order_warps()
 {
     order_lrr( m_next_cycle_prioritized_warps,
@@ -1004,6 +1047,13 @@ void gto_scheduler::order_warps()
                        m_supervised_warps.size(),
                        ORDERING_GREEDY_THEN_PRIORITY_FUNC,
                        scheduler_unit::sort_warps_by_cache_hits );
+#elif CCWS
+    order_by_priority( m_next_cycle_prioritized_warps,
+                       m_supervised_warps,
+                       m_last_supervised_issued,
+                       m_supervised_warps.size(),
+                       ORDERING_GREEDY_THEN_PRIORITY_FUNC,
+                       scheduler_unit::sort_warps_by_LLS );
 #else
     order_by_priority( m_next_cycle_prioritized_warps,
                        m_supervised_warps,
@@ -1257,14 +1307,14 @@ void ldst_unit::get_L1T_sub_stats(struct cache_sub_stats &css) const{
 }
 
 //kp  added new 
-unsigned int ldst_unit::get_cache_hits (unsigned int warp_id){
-    if(hit_count.count(warp_id)==0){
-        
+unsigned int ldst_unit::get_cache_hits (unsigned int warp_id)
+{
+    if(hit_count.count(warp_id)==0)
+    {        
         //hit_count.at(warp_id) = 0;
         hit_count.insert(std::pair<unsigned int, unsigned int>(warp_id, 0));
-        
     }
-    
+
     return hit_count.at(warp_id);
 }
 
@@ -1391,6 +1441,15 @@ ldst_unit::process_cache_access( cache_t* cache,
     return result;
 }
 
+
+//get tag
+address_type tag_func(new_addr_type address, new_addr_type line_size)
+{
+   //gives the tag for an address based on a given line size
+   return address & ~(line_size-1);
+}
+
+
 mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, warp_inst_t &inst )
 {
     mem_stage_stall_type result = NO_RC_FAIL;
@@ -1408,14 +1467,49 @@ mem_stage_stall_type ldst_unit::process_memory_access_queue( cache_t *cache, war
 
     //kp added
     if((status == HIT) || (status == HIT_RESERVED)) //TODO check what is HIT_RESERVED and whether it should be counted or not  
-      {
+    {
         
-        if(hit_count.count(inst.warp_id())==0){
-            hit_count.insert(std::pair<unsigned int, unsigned int>(inst.warp_id(), 0));
-        }
-        //printf("ESHA: arrived at this milestone \n");
-        hit_count.at(inst.warp_id()) = hit_count.at(inst.warp_id()) + 1;   
+      if(hit_count.count(inst.warp_id())==0)
+      {
+          hit_count.insert(std::pair<unsigned int, unsigned int>(inst.warp_id(), 0));
       }
+      //printf("ESHA: arrived at this milestone \n");
+      hit_count.at(inst.warp_id()) = hit_count.at(inst.warp_id()) + 1;
+
+      //[Ali]: here!
+      new_addr_type line = (cache == m_L1D) ? m_L1D->block_addr( mf->get_addr() ) : (cache == m_L1C ? m_L1C->block_addr( mf->get_addr() ) : m_L1T->block_addr( mf->get_addr() ) );
+      // printf( "line1 %llu\n", line );
+      if( cache_line_history.count( inst.warp_id() ) == 0 )
+      {
+        std::set < new_addr_type > temp;
+        temp.insert( line );
+        cache_line_history.insert( std::pair < unsigned int, std::set< new_addr_type > > ( inst.warp_id(), temp ) );
+        // printf("oooo %u\n", cache_line_history.at( inst.warp_id() ).count( line ) );
+      }
+      else
+      {
+        cache_line_history.at( inst.warp_id() ).insert( line );
+      }
+    }
+    else //a "miss"
+    {
+      new_addr_type line = (cache == m_L1D) ? m_L1D->block_addr( mf->get_addr() ) : (cache == m_L1C ? m_L1C->block_addr( mf->get_addr() ) : m_L1T->block_addr( mf->get_addr() ) );
+      // printf( "line2 %llu\n", line );
+      if( cache_line_history.count( inst.warp_id() ) != 0 )
+      {
+        // printf("here here!\n");
+        if( cache_line_history.at( inst.warp_id() ).count( line ) == 1 )
+        {
+          // printf("here here!2\n");
+          if( LLS_store.count( inst.warp_id() ) == 0)
+          {
+              LLS_store.insert( std::pair<unsigned int, unsigned int> ( inst.warp_id(), 0 ) );
+          }
+          LLS_store.at( inst.warp_id() ) = LLS_store.at( inst.warp_id() ) + 1;   
+        }
+      }
+    }
+
     return process_cache_access( cache, mf->get_addr(), inst, events, mf, status );
 }
 
